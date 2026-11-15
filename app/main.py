@@ -11,13 +11,24 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from . import contract, pipeline, report, seed, settings, store
+from . import changes, contract, pipeline, report, seed, settings, store
 
 MAX_BYTES = 8 * 1024 * 1024
 
 STATUS_HTTP = {
     "committed": 200,
     "duplicate_file": 200,
+    "rejected": 422,
+    "encoding_failed": 400,
+    "rolled_back": 500,
+}
+
+CHANGE_STATUS_HTTP = {
+    "committed": 200,
+    "already_applied": 200,
+    "conflict": 409,
+    "stale_base": 409,
+    "future_base": 409,
     "rejected": 422,
     "encoding_failed": 400,
     "rolled_back": 500,
@@ -38,7 +49,6 @@ async def lifespan(app: FastAPI):
     finally:
         conn.close()
     yield
-
 
 app = FastAPI(title=settings.APP_NAME, lifespan=lifespan)
 BASE = Path(__file__).resolve().parent
@@ -75,12 +85,20 @@ def _render(request: Request, name: str, context: dict, status_code: int = 200):
 def health():
     conn = get_conn()
     try:
+        recovery = changes.recover_current(conn)
+        current = store.get_current_version(conn)
         return {
             "status": "ok",
             "app": settings.APP_SHORT,
             "db": str(settings.DB_PATH),
             "fact_rows": store.count_rows(conn),
             "seed_version": store.get_meta(conn, "seed_version"),
+            "current_order_version": current,
+            "order_rows": (store.count_version_orders(conn, current)
+                           if current is not None else 0),
+            "current_version_complete": (changes.verify_version(conn, current)["ok"]
+                                         if current is not None else False),
+            "recovery": recovery,
         }
     finally:
         conn.close()
@@ -92,6 +110,10 @@ def index(request: Request):
     try:
         recent = store.list_batches(conn, limit=5)
         attempts = store.list_attempts(conn, limit=5)
+        change_attempts = store.list_change_attempts(conn, limit=5)
+        current = store.get_current_version(conn)
+        current_version = store.get_version(conn, current) if current is not None else None
+        change_kpi = store.change_stats(conn)
     finally:
         conn.close()
     return _render(request, "index.html", {
@@ -99,6 +121,9 @@ def index(request: Request):
         "page": "index",
         "recent_batches": recent,
         "recent_attempts": attempts,
+        "recent_change_attempts": change_attempts,
+        "current_version": current_version,
+        "change_stats": change_kpi,
         "contract_columns": contract.COLUMN_SPECS,
         "required": contract.REQUIRED,
     })
@@ -318,6 +343,158 @@ async def api_import(
 def _public_result(result: dict) -> dict:
     """返回完整结论；import 内的批次号/写入行数也保留，便于 curl 断言。"""
     return dict(result)
+
+
+# ---------------------------------------------------------------- 订单变更包
+
+
+async def _change_package(file: UploadFile) -> tuple[bytes, str]:
+    raw = await _read_upload(file)
+    return raw, file.filename or "change_package.csv"
+
+
+@app.post("/api/change-packages")
+async def api_change_package(file: UploadFile = File(...)):
+    raw, filename = await _change_package(file)
+    conn = get_conn()
+    try:
+        result = pipeline.run_change_package(raw, filename, conn=conn)
+    finally:
+        conn.close()
+    return JSONResponse(result, status_code=CHANGE_STATUS_HTTP.get(result["status"], 400))
+
+
+@app.get("/changes", response_class=HTMLResponse)
+def changes_page(request: Request):
+    conn = get_conn()
+    try:
+        versions = store.list_versions(conn, limit=50)
+        attempts = store.list_change_attempts(conn, limit=30)
+        current = store.get_current_version(conn)
+        current_version = store.get_version(conn, current) if current is not None else None
+        change_kpi = store.change_stats(conn)
+        recovery = changes.recover_current(conn)
+    finally:
+        conn.close()
+    for attempt in attempts:
+        attempt.pop("conflicts_json", None)
+        attempt.pop("errors_json", None)
+    return _render(request, "changes.html", {
+        "active": "changes",
+        "page": "changes",
+        "versions": versions,
+        "attempts": attempts,
+        "current": current,
+        "current_version": current_version,
+        "change_stats": change_kpi,
+        "recovery": recovery,
+    })
+
+
+@app.post("/changes", response_class=HTMLResponse)
+async def changes_submit(request: Request, file: UploadFile = File(...)):
+    raw, filename = await _change_package(file)
+    conn = get_conn()
+    try:
+        result = pipeline.run_change_package(raw, filename, conn=conn)
+        versions = store.list_versions(conn, limit=50)
+        attempts = store.list_change_attempts(conn, limit=30)
+        current = store.get_current_version(conn)
+        current_version = store.get_version(conn, current) if current is not None else None
+        change_kpi = store.change_stats(conn)
+        recovery = changes.recover_current(conn)
+    finally:
+        conn.close()
+    for attempt in attempts:
+        attempt.pop("conflicts_json", None)
+        attempt.pop("errors_json", None)
+    return _render(request, "changes.html", {
+        "active": "changes",
+        "page": "changes",
+        "versions": versions,
+        "attempts": attempts,
+        "current": current,
+        "current_version": current_version,
+        "change_stats": change_kpi,
+        "recovery": recovery,
+        "result": result,
+        "notice": result.get("detail"),
+    }, status_code=CHANGE_STATUS_HTTP.get(result["status"], 400))
+
+
+@app.get("/changes/version/{version_no}", response_class=HTMLResponse)
+def change_version_page(request: Request, version_no: int):
+    conn = get_conn()
+    try:
+        version = store.get_version(conn, version_no)
+        current = store.get_current_version(conn)
+        check = changes.verify_version(conn, version_no)
+        attempts = [a for a in store.list_change_attempts(conn, limit=100)
+                    if a.get("version_no") == version_no]
+    finally:
+        conn.close()
+    if not version:
+        raise HTTPException(status_code=404, detail=f"版本 {version_no} 不存在")
+    for attempt in attempts:
+        attempt.pop("conflicts_json", None)
+        attempt.pop("errors_json", None)
+    return _render(request, "change_version.html", {
+        "active": "changes",
+        "page": "changes",
+        "version": version,
+        "current": current,
+        "check": check,
+        "attempts": attempts,
+        "notice": ("当前订单就是本版本。" if version_no == current
+                   else f"本版本不是当前版本（当前为 {current}）。"),
+    })
+
+
+@app.get("/changes/attempt/{attempt_id}", response_class=HTMLResponse)
+def change_attempt_page(request: Request, attempt_id: int):
+    conn = get_conn()
+    try:
+        attempt = store.get_change_attempt(conn, attempt_id)
+    finally:
+        conn.close()
+    if not attempt:
+        raise HTTPException(status_code=404, detail=f"变更包记录 {attempt_id} 不存在")
+    return _render(request, "change_attempt.html", {
+        "active": "changes",
+        "page": "changes",
+        "attempt": attempt,
+        "conflicts": attempt.get("conflicts") or [],
+        "errors": attempt.get("errors") or [],
+    })
+
+
+@app.get("/api/change-versions")
+def api_change_versions():
+    conn = get_conn()
+    try:
+        current = store.get_current_version(conn)
+        return {
+            "current_version": current,
+            "versions": store.list_versions(conn, limit=100),
+            "stats": store.change_stats(conn),
+            "recovery": changes.recover_current(conn),
+        }
+    finally:
+        conn.close()
+
+
+@app.get("/api/change-versions/{version_no}")
+def api_change_version(version_no: int):
+    conn = get_conn()
+    try:
+        version = store.get_version(conn, version_no)
+        check = changes.verify_version(conn, version_no)
+        current = store.get_current_version(conn)
+    finally:
+        conn.close()
+    if not version:
+        raise HTTPException(status_code=404, detail=f"版本 {version_no} 不存在")
+    return {"current_version": current, "version": version, "check": check}
 
 
 @app.post("/api/contract-check")

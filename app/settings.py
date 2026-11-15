@@ -24,6 +24,15 @@ SAMPLE_FILES = [
      "desc": "重复主键/倒序/非法日期/超长/枚举越界各 1 条，应整体回滚"},
     {"name": "contract.json", "title": "列契约 contract.json",
      "desc": "列定义、类型、枚举与主键规则"},
+    {"name": "change_ok.csv", "title": "变更包（基于版本 1）",
+     "desc": "新增/改价/取消各 1 单，整包应用后切换到版本 2",
+     "kind": "change_package"},
+    {"name": "change_conflict.csv", "title": "变更包：包内订单冲突",
+     "desc": "同一 order_id 同时改价和取消，应整包拒绝并列冲突订单",
+     "kind": "change_package"},
+    {"name": "change_stale.csv", "title": "变更包：过期基准",
+     "desc": "基于版本 1；版本 1 已被切换后重放应返回 stale_base",
+     "kind": "change_package"},
 ]
 
 EXTRA_POLICIES = [

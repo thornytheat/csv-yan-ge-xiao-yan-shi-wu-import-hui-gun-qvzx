@@ -1,0 +1,128 @@
+{% extends "base.html" %}
+{% block title %}变更包记录 #{{ attempt.attempt_id }} · {{ app_name }}{% endblock %}
+{% block crumb %}变更包记录 #{{ attempt.attempt_id }}{% endblock %}
+{% block meta %}<span class="dot {% if attempt.status in ('committed','already_applied') %}ok{% else %}err{% endif %}"></span>{{ attempt.status }} · 当前订单版本 {{ attempt.current_version if attempt.current_version is not none else '（无）' }}{% endblock %}
+{% block actions %}
+<a class="btn secondary small" href="/changes">回版本页</a>
+{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-title">变更包：{{ attempt.filename }}</h1>
+    <p class="page-sub">
+      包号 <code>{{ attempt.package_id or '—' }}</code> ·
+      基准 {{ ('v' ~ attempt.base_version) if attempt.base_version is not none else '（缺失）' }} ·
+      提交时当前版本 {{ ('v' ~ attempt.current_version) if attempt.current_version is not none else '（无）' }} ·
+      {{ attempt.created_at }}
+    </p>
+  </div>
+</div>
+
+<div class="alert {% if attempt.status in ('committed','already_applied') %}alert-info{% else %}alert-error{% endif %}">
+  <b>
+    {% if attempt.status == 'committed' %}已切换版本 {{ attempt.version_no }}
+    {% elif attempt.status == 'already_applied' %}幂等重试，未重复计入
+    {% elif attempt.status == 'stale_base' %}基准版本过期，整包拒绝
+    {% elif attempt.status == 'future_base' %}基准版本超前，整包拒绝
+    {% elif attempt.status == 'conflict' %}订单冲突，整包拒绝
+    {% else %}整包拒绝（{{ attempt.status }}）{% endif %}
+  </b>
+  · {{ attempt.detail }}
+</div>
+
+<div class="kpi-strip">
+  <div class="kpi">
+    <div class="k-label">结论</div>
+    <div class="k-value" style="font-size:18px">{{ attempt.status }}</div>
+    <div class="k-note">{% if attempt.status in ('committed','already_applied') %}已应用{% else %}未写入 / 未切换{% endif %}</div>
+  </div>
+  <div class="kpi {% if attempt.conflict_count %}err{% endif %}">
+    <div class="k-label">冲突订单</div>
+    <div class="k-value">{{ attempt.conflict_count }}</div>
+    <div class="k-note">包内冲突 + 基准不一致</div>
+  </div>
+  <div class="kpi">
+    <div class="k-label">变更行数</div>
+    <div class="k-value">{{ attempt.op_count }}</div>
+    <div class="k-note">包内操作行</div>
+  </div>
+  <div class="kpi">
+    <div class="k-label">版本</div>
+    <div class="k-value" style="font-size:18px">{{ ('v' ~ attempt.version_no) if attempt.version_no else '—' }}</div>
+    <div class="k-note">成功时为写入的新版本</div>
+  </div>
+</div>
+
+{% if conflicts %}
+<section class="panel">
+  <div class="panel-head">
+    <h2>冲突订单（整包拒绝依据）</h2>
+    <div class="panel-actions"><span class="tag err">{{ conflicts|length }} 处</span></div>
+  </div>
+  <div class="table-wrap roomy">
+    <table class="dense">
+      <thead><tr><th>order_id</th><th>操作</th><th>冲突类型</th><th class="num">包内行号</th><th>原因</th></tr></thead>
+      <tbody>
+      {% for c in conflicts %}
+        <tr>
+          <td>{% if c.order_id is not none %}<code>{{ c.order_id }}</code>{% else %}<span class="muted">—</span>{% endif %}</td>
+          <td>{% if c.op %}<span class="tag">{{ c.op }}</span>{% else %}<span class="muted">—</span>{% endif %}</td>
+          <td><span class="tag err">{{ c.label }}</span><div class="small muted"><code>{{ c.code }}</code></div></td>
+          <td class="num">{{ c.line_no if c.line_no is not none else '—' }}{% if c.line_nos %} <span class="muted small">({{ c.line_nos | join(', ') }})</span>{% endif %}</td>
+          <td class="small">{{ c.reason }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endif %}
+
+{% if errors %}
+<section class="panel">
+  <div class="panel-head">
+    <h2>包格式错误</h2>
+    <div class="panel-actions"><span class="tag err">{{ errors|length }} 处</span></div>
+  </div>
+  <div class="table-wrap roomy">
+    <table class="dense">
+      <thead><tr><th class="num">行号</th><th>列</th><th>类型</th><th>原值</th><th>原因</th></tr></thead>
+      <tbody>
+      {% for e in errors %}
+        <tr>
+          <td class="num">{{ e.line_no }}</td>
+          <td>{% if e.column %}<code>{{ e.column }}</code>{% else %}<span class="muted">整行</span>{% endif %}</td>
+          <td><span class="tag err">{{ e.label }}</span></td>
+          <td class="mono">{{ e.raw if e.raw else '（空）' }}</td>
+          <td>{{ e.reason }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endif %}
+
+<section class="panel">
+  <div class="panel-head">
+    <h2>文件证据</h2>
+  </div>
+  <div class="table-wrap auto">
+    <table class="dense">
+      <tbody>
+        <tr><th style="width:180px">文件名</th><td>{{ attempt.filename }}</td></tr>
+        <tr><th>sha256</th><td><code class="mono">{{ attempt.sha256 }}</code></td></tr>
+        <tr><th>编码</th><td>{% if attempt.encoding %}<span class="tag">{{ attempt.encoding }}</span>{% else %}未识别{% endif %}</td></tr>
+        <tr><th>基准 / 当时当前</th><td>
+          {{ ('v' ~ attempt.base_version) if attempt.base_version is not none else '（缺失）' }} /
+          {{ ('v' ~ attempt.current_version) if attempt.current_version is not none else '（无）' }}
+        </td></tr>
+        {% if attempt.version_no %}
+        <tr><th>写入版本</th><td><a href="/changes/version/{{ attempt.version_no }}">v{{ attempt.version_no }}</a></td></tr>
+        {% endif %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

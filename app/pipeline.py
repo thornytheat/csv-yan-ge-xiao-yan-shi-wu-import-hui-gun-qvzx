@@ -8,7 +8,7 @@ import csv
 import io
 import sqlite3
 
-from . import aggregate, contract, encoding, importer, report, rows as rows_mod, store
+from . import aggregate, changes, contract, encoding, importer, report, rows as rows_mod, store
 
 
 def parse_csv(text: str) -> tuple[list[str], list[list[str]], list[int]]:
@@ -156,6 +156,73 @@ def run(
             result["detail"] = outcome.get("duplicate_hint") or outcome.get("detail", "")
         if outcome.get("duplicate_hint"):
             result["duplicate_hint"] = outcome["duplicate_hint"]
+        return result
+    finally:
+        if own_conn:
+            conn.close()
+
+
+def run_change_package(
+    raw: bytes,
+    filename: str,
+    conn: sqlite3.Connection | None = None,
+    fail_after: int | None = None,
+) -> dict:
+    """订单变更包：编码探测 → 包解析/包内冲突 → 基准版本校验 → 原子切换版本。
+
+    与 run() 共用编码模块；解析与版本判定都在 changes.py，路由只渲染。
+    """
+    own_conn = conn is None
+    conn = conn or store.connect()
+    sha = importer.file_sha256(raw)
+    try:
+        result: dict = {
+            "kind": "change_package",
+            "filename": filename,
+            "sha256": sha,
+            "bytes": len(raw),
+            "sample_hex": encoding.sample_hex(raw),
+        }
+        try:
+            probe = encoding.probe(raw)
+        except encoding.EncodingError as exc:
+            current = store.get_current_version(conn)
+            attempt_id = store.record_change_attempt(
+                conn, filename=filename, sha256=sha, status="encoding_failed",
+                current_version=current, detail=exc.message,
+            )
+            result.update({
+                "status": "encoding_failed",
+                "detail": exc.message,
+                "current_version": current,
+                "encoding": {"encoding": None, "bom": raw.startswith(encoding.UTF8_BOM),
+                             "sample_hex": exc.sample_hex, "attempts": exc.attempts},
+                "attempt_id": attempt_id,
+                "conflicts": [],
+                "conflict_order_ids": [],
+                "written": 0,
+            })
+            return result
+
+        result["encoding"] = probe.evidence()
+        parsed = changes.parse_package(probe.text)
+        result["package"] = {
+            "package_id": parsed["package_id"],
+            "base_version": parsed["base_version"],
+            "op_count": parsed["op_count"],
+            "op_counts": parsed["op_counts"],
+            "header": parsed["header"],
+            "header_line": parsed["header_line"],
+        }
+        result["current_version"] = store.get_current_version(conn)
+
+        outcome = changes.apply_package(
+            conn, filename=filename, sha256=sha, parsed=parsed,
+            encoding_name=probe.encoding, fail_after=fail_after,
+        )
+        result.update(outcome)
+        result["rows_before"] = parsed["op_count"]
+        result["rows_after"] = outcome.get("row_count")
         return result
     finally:
         if own_conn:

@@ -1,0 +1,7 @@
+# csvgate-change-package v1
+# package_id: PKG-20261115-001
+# base_version: 1
+op,order_id,site,category,order_date,amount,qty,memo
+add,710001,beijing,electronics,2026-11-15,299.00,2,新客首单
+reprice,700003,guangzhou,apparel,2026-10-26,19.74,8,
+cancel,700004,,,,,,

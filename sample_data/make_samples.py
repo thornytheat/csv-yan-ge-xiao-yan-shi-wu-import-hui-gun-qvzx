@@ -22,6 +22,8 @@ HEADER = ["site", "category", "order_id", "order_date", "amount", "qty"]
 SITES = ["beijing", "shanghai", "guangzhou", "shenzhen", "chengdu", "hangzhou"]
 CATEGORIES = ["electronics", "grocery", "apparel"]
 
+CHANGE_HEADER = ["op", "order_id", "site", "category", "order_date", "amount", "qty", "memo"]
+
 CONTRACT = {
     "contract_version": "2026.11",
     "dataset": "daily_site_orders",
@@ -115,6 +117,40 @@ def broken_rows() -> list[list[str]]:
     ]
 
 
+def change_package(package_id: str, base_version: int, ops: list[list[str]]) -> str:
+    """变更包：`#` 元数据 + 固定表头 + 操作行；行号与文件行可直接对应。"""
+    lines = [
+        "# csvgate-change-package v1",
+        f"# package_id: {package_id}",
+        f"# base_version: {base_version}",
+        ",".join(CHANGE_HEADER),
+    ]
+    lines += [",".join(op) for op in ops]
+    return "\n".join(lines) + "\n"
+
+
+def change_packages() -> dict[str, str]:
+    """演示用变更包：均基于版本 1（seed 快照，60 行）。"""
+    return {
+        # 成功包：新增 + 改价 + 取消各 1 单 → 版本 2（仍是 60 行）
+        "change_ok.csv": change_package("PKG-20261115-001", 1, [
+            ["add", "710001", "beijing", "electronics", "2026-11-15", "299.00", "2", "新客首单"],
+            ["reprice", "700003", "guangzhou", "apparel", "2026-10-26", "19.74", "8", ""],
+            ["cancel", "700004", "", "", "", "", "", ""],
+        ]),
+        # 包内冲突：同一个 order_id 出现两次 → 整包拒绝
+        "change_conflict.csv": change_package("PKG-20261115-002", 1, [
+            ["reprice", "700003", "guangzhou", "apparel", "2026-10-26", "19.74", "8", ""],
+            ["cancel", "700003", "", "", "", "", "", ""],
+            ["add", "710002", "shanghai", "grocery", "2026-11-15", "88.00", "1", ""],
+        ]),
+        # 过期基准：基于版本 1，但在版本 1 已切走后重放 → stale_base
+        "change_stale.csv": change_package("PKG-20261115-003", 1, [
+            ["add", "710003", "shenzhen", "grocery", "2026-11-15", "66.00", "3", ""],
+        ]),
+    }
+
+
 def main() -> None:
     write_csv(HERE / "normal_500.csv", HEADER,
               rows(500, 100001, date(2026, 11, 1), 13, memo=False), "utf-8")
@@ -123,6 +159,8 @@ def main() -> None:
     write_csv(HERE / "seed_20261107.csv", HEADER,
               rows(60, 700001, date(2026, 10, 26), 7, memo=False), "utf-8")
     write_csv(HERE / "broken.csv", HEADER, broken_rows(), "utf-8")
+    for name, text in change_packages().items():
+        (HERE / name).write_bytes(text.encode("utf-8"))
     (HERE / "contract.json").write_text(
         json.dumps(CONTRACT, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 

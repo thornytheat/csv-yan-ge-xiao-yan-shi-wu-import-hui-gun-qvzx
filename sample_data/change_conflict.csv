@@ -1,0 +1,7 @@
+# csvgate-change-package v1
+# package_id: PKG-20261115-002
+# base_version: 1
+op,order_id,site,category,order_date,amount,qty,memo
+reprice,700003,guangzhou,apparel,2026-10-26,19.74,8,
+cancel,700003,,,,,,
+add,710002,shanghai,grocery,2026-11-15,88.00,1,

@@ -1,0 +1,5 @@
+# csvgate-change-package v1
+# package_id: PKG-20261115-003
+# base_version: 1
+op,order_id,site,category,order_date,amount,qty,memo
+add,710003,shenzhen,grocery,2026-11-15,66.00,3,

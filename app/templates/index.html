@@ -1,8 +1,9 @@
 {% extends "base.html" %}
 {% block title %}总览 · {{ app_name }}{% endblock %}
 {% block crumb %}总览{% endblock %}
-{% block meta %}<span class="dot ok"></span>服务正常 · 库内批次 {{ stats.batches }} · 明细 {{ stats.fact_rows }} 行{% endblock %}
+{% block meta %}<span class="dot ok"></span>服务正常 · 当前订单版本 {{ change_stats.current_order_version if change_stats.current_order_version is not none else '（无）' }} · 明细 {{ stats.fact_rows }} 行{% endblock %}
 {% block actions %}
+<a class="btn secondary small" href="/changes">订单版本</a>
 <a class="btn secondary small" href="/review">历史与复核</a>
 <a class="btn small" href="/workbench">去上传校验</a>
 {% endblock %}
@@ -72,6 +73,77 @@
     </table>
   </div>
 </section>
+
+<section class="panel">
+  <div class="panel-head">
+    <h2>当前订单版本</h2>
+    <div class="panel-actions">
+      <span class="tag {% if current_version %}ok{% endif %}">{{ ('v' ~ current_version.version_no) if current_version else '尚无版本' }}</span>
+      <a class="btn secondary small" href="/changes">版本与变更包</a>
+    </div>
+  </div>
+  {% if current_version %}
+  <div class="table-wrap roomy">
+    <table class="dense">
+      <thead><tr><th>站点</th><th class="num">行数</th><th class="num">金额</th><th class="num">件数</th></tr></thead>
+      <tbody>
+        {% for g in current_version.summary %}
+        <tr><td>{{ g.site }}</td><td class="num">{{ g.row_count }}</td>
+            <td class="num">¥{{ g.amount }}</td><td class="num">{{ g.qty }}</td></tr>
+        {% endfor %}
+      </tbody>
+      <tfoot>
+        <tr><th>合计</th><th class="num">{{ current_version.row_count }}</th>
+            <th class="num">¥{{ current_version.total_amount }}</th>
+            <th class="num">{{ current_version.total_qty }}</th></tr>
+      </tfoot>
+    </table>
+  </div>
+  <div class="panel-body tight">
+    <p class="small muted" style="margin:0">
+      当前订单与站点汇总同为版本 v{{ current_version.version_no }} 的快照（包号 <code>{{ current_version.package_id }}</code>，{{ current_version.created_at }}）。
+      变更包基于过期版本或存在订单冲突时整包拒绝，不会出现新旧记录混在一起的当前订单。
+    </p>
+  </div>
+  {% else %}
+  <div class="empty">
+    <strong>还没有订单版本</strong>
+    变更包页面上传第一份包，或检查 seed 基线是否成功建立。
+  </div>
+  {% endif %}
+</section>
+
+{% if recent_change_attempts %}
+<section class="panel">
+  <div class="panel-head">
+    <h2>最近变更包</h2>
+    <div class="panel-actions"><a class="btn secondary small" href="/changes">全部</a></div>
+  </div>
+  <div class="table-wrap roomy">
+    <table class="dense">
+      <thead><tr><th>#</th><th>文件</th><th>包号</th><th>基准</th><th>结论</th><th class="num">冲突</th><th>时间</th></tr></thead>
+      <tbody>
+      {% for a in recent_change_attempts %}
+        <tr>
+          <td><a href="/changes/attempt/{{ a.attempt_id }}">{{ a.attempt_id }}</a></td>
+          <td class="cell-ellipsis">{{ a.filename }}</td>
+          <td class="small"><code>{{ a.package_id or '—' }}</code></td>
+          <td class="small">{{ ('v' ~ a.base_version) if a.base_version is not none else '—' }}</td>
+          <td>
+            {% if a.status == 'committed' %}<span class="tag ok">已切换</span>
+            {% elif a.status == 'already_applied' %}<span class="tag warn">幂等重试</span>
+            {% elif a.status in ('stale_base','future_base') %}<span class="tag err">基准过期</span>
+            {% else %}<span class="tag err">{{ a.status }}</span>{% endif %}
+          </td>
+          <td class="num">{{ a.conflict_count }}</td>
+          <td class="small muted nowrap">{{ a.created_at[5:16] }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endif %}
 
 <div class="split wide-left">
   <div>

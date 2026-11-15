@@ -1,0 +1,157 @@
+{% extends "base.html" %}
+{% block title %}版本 v{{ version.version_no }} · {{ app_name }}{% endblock %}
+{% block crumb %}版本 v{{ version.version_no }}{% endblock %}
+{% block meta %}<span class="dot {% if version.version_no == current %}ok{% else %}warn{% endif %}"></span>{% if version.version_no == current %}当前订单版本{% else %}历史版本 · 当前为 v{{ current }}{% endif %}{% endblock %}
+{% block actions %}
+<a class="btn secondary small" href="/changes">版本列表</a>
+<a class="btn secondary small" href="/api/change-versions/{{ version.version_no }}">版本 JSON</a>
+{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-title">订单版本 v{{ version.version_no }}</h1>
+    <p class="page-sub">
+      包号 <code>{{ version.package_id }}</code> ·
+      基准 {% if version.base_version %}v{{ version.base_version }}{% else %}基线快照{% endif %} ·
+      {{ version.created_at }} ·
+      {% if version.version_no == current %}<span class="tag ok">当前</span>{% else %}<span class="tag warn">历史版本</span>{% endif %}
+    </p>
+  </div>
+</div>
+
+{% if notice %}<div class="alert alert-info">{{ notice }}</div>{% endif %}
+
+<div class="kpi-strip">
+  <div class="kpi">
+    <div class="k-label">变更行数</div>
+    <div class="k-value">{{ version.op_count }}</div>
+    <div class="k-note">+{{ version.add_count }} / ¥{{ version.reprice_count }} / ×{{ version.cancel_count }}</div>
+  </div>
+  <div class="kpi ok">
+    <div class="k-label">快照订单行数</div>
+    <div class="k-value">{{ version.row_count }}</div>
+    <div class="k-note">完整快照，不是增量</div>
+  </div>
+  <div class="kpi">
+    <div class="k-label">金额合计</div>
+    <div class="k-value" style="font-size:19px">¥{{ version.total_amount }}</div>
+    <div class="k-note">{{ version.total_qty }} 件 · 站点 {{ version.summary|length }} 个</div>
+  </div>
+  <div class="kpi {% if check.ok %}ok{% else %}err{% endif %}">
+    <div class="k-label">完整性自检</div>
+    <div class="k-value" style="font-size:18px">{% if check.ok %}通过{% else %}未通过{% endif %}</div>
+    <div class="k-note">明细 / 汇总 / 版本头三方核对</div>
+  </div>
+</div>
+
+<div class="split wide-left">
+  <div>
+    <section class="panel">
+      <div class="panel-head">
+        <h2>站点汇总</h2>
+        <div class="panel-actions"><span class="tag">v{{ version.version_no }} 快照</span></div>
+      </div>
+      <div class="table-wrap roomy">
+        <table class="dense">
+          <thead><tr><th>站点</th><th class="num">行数</th><th class="num">金额</th><th class="num">件数</th></tr></thead>
+          <tbody>
+          {% for g in version.summary %}
+            <tr><td>{{ g.site }}</td><td class="num">{{ g.row_count }}</td>
+                <td class="num">¥{{ g.amount }}</td><td class="num">{{ g.qty }}</td></tr>
+          {% endfor %}
+          </tbody>
+          <tfoot>
+            <tr><th>合计</th><th class="num">{{ version.row_count }}</th>
+                <th class="num">¥{{ version.total_amount }}</th><th class="num">{{ version.total_qty }}</th></tr>
+          </tfoot>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <h2>本版本应用的变更</h2>
+        <div class="panel-actions"><span class="tag">{{ version.changes|length }} 条</span></div>
+      </div>
+      <div class="table-wrap">
+        <table class="dense">
+          <thead><tr><th>order_id</th><th>操作</th></tr></thead>
+          <tbody>
+          {% for c in version.changes %}
+            <tr><td>{{ c.order_id }}</td>
+                <td>{% if c.op == 'add' %}<span class="tag ok">新增</span>
+                    {% elif c.op == 'reprice' %}<span class="tag warn">改价</span>
+                    {% else %}<span class="tag err">取消</span>{% endif %}</td></tr>
+          {% else %}
+            <tr><td colspan="2" class="muted">基线快照，没有变更行。</td></tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <h2>订单明细（前 20 行）</h2>
+        <div class="panel-actions"><span class="tag">{{ version.row_count }} 行</span></div>
+      </div>
+      <div class="table-wrap roomy">
+        <table class="dense">
+          <thead><tr><th>order_id</th><th>site</th><th>category</th><th>order_date</th><th class="num">amount</th><th class="num">qty</th></tr></thead>
+          <tbody>
+          {% for r in version.sample_orders %}
+            <tr><td>{{ r.order_id }}</td><td>{{ r.site }}</td><td>{{ r.category }}</td>
+                <td>{{ r.order_date }}</td><td class="num">¥{{ r.amount }}</td><td class="num">{{ r.qty }}</td></tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+
+  <div>
+    <section class="panel pane-sticky">
+      <div class="panel-head">
+        <h2>完整性自检</h2>
+        <div class="panel-actions"><span class="tag {% if check.ok %}ok{% else %}err{% endif %}">{% if check.ok %}通过{% else %}未通过{% endif %}</span></div>
+      </div>
+      <div class="table-wrap auto">
+        <table class="dense">
+          <tbody>
+          {% for c in check.checks %}
+            <tr>
+              <th style="width:52%">{{ c.name }}</th>
+              <td>{% if c.ok %}<span class="tag ok">一致</span>{% else %}<span class="tag err">不一致</span>{% endif %}
+                <div class="small muted">{{ c.detail }}</div></td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <div class="panel-body tight">
+        <p class="small muted" style="margin:0">切换到版本时，只有这些核对全部成立才会推进 meta 指针；否则整包回滚。</p>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <h2>相关上传记录</h2>
+      </div>
+      <div class="table-wrap">
+        <table class="dense">
+          <tbody>
+          {% for a in attempts %}
+            <tr><td>#{{ a.attempt_id }}</td><td class="small">{{ a.filename }}</td>
+                <td><span class="tag">{{ a.status }}</span></td>
+                <td class="small muted">{{ a.created_at }}</td></tr>
+          {% else %}
+            <tr><td class="muted">没有关联记录。</td></tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+</div>
+{% endblock %}
